@@ -10,6 +10,8 @@ __metaclass__ = type
 from textwrap import dedent
 from unittest.mock import patch
 
+from ansible.module_utils.connection import ConnectionError
+
 from ansible_collections.cisco.ios.plugins.modules import ios_bgp_address_family
 from ansible_collections.cisco.ios.tests.unit.modules.utils import set_module_args
 
@@ -1601,5 +1603,230 @@ class TestIosBgpAddressFamilyModule(TestIosModule):
             "exit-address-family",
         ]
 
+        result = self.execute_module(changed=True)
+        self.assertEqual(sorted(result["commands"]), sorted(commands))
+
+    def test_ios_bgp_address_family_merged_l2vpn_vpls(self):
+        self.execute_show_command.return_value = dedent(
+            """\
+            router bgp 12345
+             bgp log-neighbor-changes
+            """,
+        )
+
+        set_module_args(
+            dict(
+                config=dict(
+                    as_number="12345",
+                    address_family=[
+                        dict(
+                            afi="l2vpn",
+                            safi="vpls",
+                            neighbors=[
+                                dict(
+                                    neighbor_address="192.168.2.1",
+                                    activate=True,
+                                ),
+                            ],
+                        ),
+                    ],
+                ),
+                state="merged",
+            ),
+        )
+        commands = [
+            "router bgp 12345",
+            "address-family l2vpn vpls",
+            "neighbor 192.168.2.1 activate",
+            "exit-address-family",
+        ]
+        result = self.execute_module(changed=True)
+        self.assertEqual(sorted(result["commands"]), sorted(commands))
+
+    @patch(
+        "ansible_collections.ansible.netcommon.plugins.module_utils.network.common."
+        "rm_base.resource_module.ResourceModule.run_commands",
+    )
+    def test_ios_bgp_address_family_topology_init_error(self, mock_run):
+        """Module should fail with a license hint when the device returns
+        '% BGP: Error initializing topology'."""
+        mock_run.side_effect = ConnectionError(
+            "address-family l2vpn vpls\r\n% BGP: Error initializing topology",
+        )
+        self.execute_show_command.return_value = dedent(
+            """\
+            router bgp 65000
+             bgp log-neighbor-changes
+            """,
+        )
+        set_module_args(
+            dict(
+                config=dict(
+                    as_number="65000",
+                    address_family=[
+                        dict(afi="l2vpn", safi="vpls"),
+                    ],
+                ),
+                state="merged",
+            ),
+        )
+        result = self.execute_module(failed=True)
+        self.assertIn("Error initializing topology", result["msg"])
+        self.assertIn("license", result["msg"])
+
+    @patch(
+        "ansible_collections.ansible.netcommon.plugins.module_utils.network.common."
+        "rm_base.resource_module.ResourceModule.run_commands",
+    )
+    def test_ios_bgp_address_family_non_topology_connection_error(self, mock_run):
+        """Non-topology ConnectionError should be re-raised, not swallowed."""
+        mock_run.side_effect = ConnectionError("some other connection problem")
+        self.execute_show_command.return_value = dedent(
+            """\
+            router bgp 65000
+             bgp log-neighbor-changes
+            """,
+        )
+        set_module_args(
+            dict(
+                config=dict(
+                    as_number="65000",
+                    address_family=[
+                        dict(afi="l2vpn", safi="vpls"),
+                    ],
+                ),
+                state="merged",
+            ),
+        )
+        with self.assertRaises(ConnectionError):
+            self.module.main()
+
+    def test_ios_bgp_address_family_replaced_routemap_removed(self):
+        """Regression: state=replaced must negate a route-map absent from want."""
+        self.execute_show_command.return_value = dedent(
+            """\
+            router bgp 65000
+             address-family ipv4
+              neighbor 2.2.2.2 activate
+              neighbor 2.2.2.2 route-map AS-PATH-PREPEND out
+             exit-address-family
+            """,
+        )
+        set_module_args(
+            dict(
+                config=dict(
+                    as_number="65000",
+                    address_family=[
+                        dict(
+                            afi="ipv4",
+                            neighbors=[
+                                dict(
+                                    neighbor_address="2.2.2.2",
+                                    activate=True,
+                                ),
+                            ],
+                        ),
+                    ],
+                ),
+                state="replaced",
+            ),
+        )
+        commands = [
+            "router bgp 65000",
+            "address-family ipv4 unicast",
+            "no neighbor 2.2.2.2 route-map AS-PATH-PREPEND out",
+            "exit-address-family",
+        ]
+        result = self.execute_module(changed=True)
+        self.assertEqual(sorted(result["commands"]), sorted(commands))
+
+    def test_ios_bgp_address_family_replaced_routemap_moved(self):
+        """Regression: moving a route-map from neighbor A to B must negate it on A."""
+        self.execute_show_command.return_value = dedent(
+            """\
+            router bgp 65000
+             address-family ipv4
+              neighbor 1.1.1.1 activate
+              neighbor 2.2.2.2 activate
+              neighbor 2.2.2.2 route-map AS-PATH-PREPEND out
+             exit-address-family
+            """,
+        )
+        set_module_args(
+            dict(
+                config=dict(
+                    as_number="65000",
+                    address_family=[
+                        dict(
+                            afi="ipv4",
+                            neighbors=[
+                                dict(
+                                    neighbor_address="2.2.2.2",
+                                    activate=True,
+                                ),
+                                dict(
+                                    neighbor_address="1.1.1.1",
+                                    activate=True,
+                                    route_maps=[
+                                        dict(name="AS-PATH-PREPEND", out=True),
+                                    ],
+                                ),
+                            ],
+                        ),
+                    ],
+                ),
+                state="replaced",
+            ),
+        )
+        commands = [
+            "router bgp 65000",
+            "address-family ipv4 unicast",
+            "no neighbor 2.2.2.2 route-map AS-PATH-PREPEND out",
+            "neighbor 1.1.1.1 route-map AS-PATH-PREPEND out",
+            "exit-address-family",
+        ]
+        result = self.execute_module(changed=True)
+        self.assertEqual(sorted(result["commands"]), sorted(commands))
+
+    def test_ios_bgp_address_family_replaced_routemap_partial_removal(self):
+        """Regression: keep in-direction route-map but negate out-direction absent from want."""
+        self.execute_show_command.return_value = dedent(
+            """\
+            router bgp 65000
+             address-family ipv4
+              neighbor 2.2.2.2 activate
+              neighbor 2.2.2.2 route-map INBOUND-MAP in
+              neighbor 2.2.2.2 route-map OUTBOUND-MAP out
+             exit-address-family
+            """,
+        )
+        set_module_args(
+            dict(
+                config=dict(
+                    as_number="65000",
+                    address_family=[
+                        dict(
+                            afi="ipv4",
+                            neighbors=[
+                                dict(
+                                    neighbor_address="2.2.2.2",
+                                    activate=True,
+                                    route_maps=[
+                                        {"name": "INBOUND-MAP", "in": True},
+                                    ],
+                                ),
+                            ],
+                        ),
+                    ],
+                ),
+                state="replaced",
+            ),
+        )
+        commands = [
+            "router bgp 65000",
+            "address-family ipv4 unicast",
+            "no neighbor 2.2.2.2 route-map OUTBOUND-MAP out",
+            "exit-address-family",
+        ]
         result = self.execute_module(changed=True)
         self.assertEqual(sorted(result["commands"]), sorted(commands))

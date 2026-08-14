@@ -4,6 +4,43 @@ Cisco Ios Collection Release Notes
 
 .. contents:: Topics
 
+v11.5.1
+=======
+
+Bugfixes
+--------
+
+- ios_acls - Correct port to protocol mapping for port 5001 and 5002.
+- ios_bgp_address_family - Add ``vpls`` as a valid ``safi`` choice for the ``l2vpn`` address family configuration.
+- ios_user - fixed hashed_password idempotency so that re-applying the same type/value pair against an already-configured user produces no commands, preventing unnecessary password updates on repeat runs.
+- ios_user - parse_hashed_password  helper now extracts the stored hash type, hash value from running config, enabling proper diff-based idempotency checks for hashed_password.
+- ios_user - update_password and password_type are now resolved per aggregate item via get_param_value, allowing each entry in the aggregate list to independently override the module-level defaults
+- terminal - Add ``% IPv6 routing not enabled`` to ``terminal_stderr_re`` so that configuring BGP IPv6/VPNv6 address-family without ``ipv6 unicast-routing`` correctly raises an error instead of silently succeeding (https://github.com/ansible-collections/cisco.ios/issues/1301).
+
+Documentation Changes
+---------------------
+
+- ios_user - clarified that update_password (on_create/always) applies only to configured_password; hashed_password always uses hash type and value comparison to determine whether a change is required.
+- ios_user - documented type 9 (scrypt) as a valid hash type alongside the existing type 5 (MD5) and type 8 (PBKDF2) examples for hashed_password.
+
+v11.5.0
+=======
+
+Minor Changes
+-------------
+
+- Remediate deprecated ``warnings`` parameter in ``exit_json`` calls by using ``emit_warnings`` from ``ansible.netcommon`` across cisco.ios modules to address deprecation warning from ansible-core 2.23.
+- Remove ``ansible.module_utils.six`` usage in favour of Python 3 builtins to prepare for ansible-core 2.24 removal.
+- Replace deprecated ``ansible.module_utils._text`` imports with ``ansible.module_utils.common.text.converters``.
+- Replace deprecated ``ansible.module_utils.common._collections_compat`` with ``collections.abc`` from the Python standard library.
+- Updated all ``ResourceModule``-based resource modules to emit warnings via ``AnsibleModule.warn()`` before calling ``exit_json``.
+- Updated standalone modules (``ios_banner``, ``ios_command``, ``ios_config``, ``ios_facts``, ``ios_ping``, ``ios_system``, ``ios_user``, ``ios_vrf``) to emit warnings via ``AnsibleModule.warn()`` before calling ``exit_json``.
+
+Bugfixes
+--------
+
+- ios_acls - Fixed ACL option fields with multi-word names (e.g, any_options, stream_id , no_op) failing due to missing underscore to hyphen conversion and vice-versa in setval and getval respectively
+
 v11.4.2
 =======
 
